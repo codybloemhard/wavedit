@@ -1,13 +1,11 @@
 use hound;
-use std::time::Duration;
 use std::time::Instant;
 
 fn main() {
     println!("Henlo!");
     let max = 100;
     let verbose = true;
-    let start = Instant::now();
-    let mut till = 0;
+    let mut stamper = Stamper::new();
     let mut reader = hound::WavReader::open("/home/cody/temp/180101_0006.wav").expect("bruh");
     let mut copy = Vec::new();
     for s in reader.samples::<i16>(){
@@ -15,7 +13,7 @@ fn main() {
         let s = s.unwrap();
         copy.push(s);
     }
-    stamp(&start, &mut till, "Copying");
+    stamper.stamp("Copying");
     let mut hist = vec![0usize; 2048];
     let mut total = 0;
     for s in &copy{
@@ -23,10 +21,10 @@ fn main() {
         hist[i as usize] += 1usize;
         total += 1;
     }
-    stamp(&start, &mut till, "Histogram");
+    stamper.stamp("Histogram");
     println!("Total samples: {}", total);
     let cs = depeaked_size(&hist, max);
-    stamp(&start, &mut till, "Depeak scan");
+    stamper.stamp("Depeak scan");
     println!("Upwards from cell {} out of {} will be clipped with max cell length > {}", cs, hist.len() - 1, max);
     let thresh = (cs << 4) as i16;
     let spec = hound::WavSpec {
@@ -42,8 +40,8 @@ fn main() {
         writer.write_sample(ns as i16).unwrap();
     }
     println!("Samples clipped: {} out of {} which is 1/{} or {}%", diff_count, total, total / diff_count, diff_count as f64 / total as f64 * 100.0);
-    stamp(&start, &mut till, "Write");
-    println!("Total took {} ms", start.elapsed().as_millis());
+    stamper.stamp("Write");
+    println!("Total took {} ms", stamper.elapsed());
 }
 
 fn depeaked_size(hist: &Vec<usize>, max: usize) -> usize{
@@ -56,8 +54,26 @@ fn depeaked_size(hist: &Vec<usize>, max: usize) -> usize{
     i
 }
 
-fn stamp(start: &Instant, till: &mut u128, action: &str){
-    let elapsed = start.elapsed().as_millis();
-    println!("{} took {} ms", action, elapsed - *till);
-    *till = elapsed;
+struct Stamper{
+    start: Instant,
+    till: u128,
+}
+
+impl Stamper{
+    pub fn new() -> Self{
+        Self{
+            start: Instant::now(),
+            till: 0,
+        }
+    }
+
+    pub fn stamp(&mut self, action: &str){
+        let elapsed = self.start.elapsed().as_millis();
+        println!("{} took {} ms", action, elapsed - self.till);
+        self.till = elapsed;
+    }
+
+    pub fn elapsed(&self) -> u128{
+        self.start.elapsed().as_millis()
+    }
 }
