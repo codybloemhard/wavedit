@@ -1,19 +1,29 @@
-use hound;
 use std::time::Instant;
 
 fn main() {
+    let args = lapp::parse_args("
+        Wavedit edits .wav files.
+        --max (default 100) maximum amount of samples allowed per cell
+        -v, --verbose print more info
+        -s, --stats calculate some extra statistics
+        <file> (string) input file
+    ");
     println!("Henlo!");
-    let max = 100;
-    let verbose = true;
-    let mut stamper = Stamper::new();
-    let mut reader = hound::WavReader::open("/home/cody/temp/180101_0006.wav").expect("bruh");
+    let max = args.get_integer("max");
+    let max = if max < 0 { panic!("Error: max must be in {{0..2^64 - 1}}"); }
+    else { max as usize };
+    let verbose = args.get_bool("verbose");
+    let stats = args.get_bool("stats");
+    let file = args.get_string("file");
+    let mut stamper = Stamper::new(verbose);
+    let mut reader = hound::WavReader::open(file).expect("Could not open file!");
     let mut copy = Vec::new();
     for s in reader.samples::<i16>(){
         if s.is_err() { continue; }
         let s = s.unwrap();
         copy.push(s);
     }
-    stamper.stamp("Copying");
+    stamper.stamp_step("Copying");
     let mut hist = vec![0usize; 2048];
     let mut total = 0;
     for s in &copy{
@@ -21,11 +31,13 @@ fn main() {
         hist[i as usize] += 1usize;
         total += 1;
     }
-    stamper.stamp("Histogram");
+    stamper.stamp_step("Histogram");
     println!("Total samples: {}", total);
     let cs = depeaked_size(&hist, max);
-    stamper.stamp("Depeak scan");
-    println!("Upwards from cell {} out of {} will be clipped with max cell length > {}", cs, hist.len() - 1, max);
+    stamper.stamp_step("Depeak scan");
+    if verbose {
+        println!("upwards from cell {} out of {} will be clipped with max cell length > {}", cs, hist.len() - 1, max);
+    }
     let thresh = (cs << 4) as i16;
     let spec = hound::WavSpec {
         channels: 2,
@@ -34,17 +46,23 @@ fn main() {
         sample_format: hound::SampleFormat::Int,
     };
     let mut writer = hound::WavWriter::create("outp.wav", spec).unwrap();
-    let mut diff_count = 0;
-    for (os, ns) in copy.into_iter().map(|s| (s, s.min(thresh).max(-thresh))) {
-        if ns != os { diff_count += 1; }
-        writer.write_sample(ns as i16).unwrap();
+    if stats{
+        let mut diff_count = 0;
+        for (os, ns) in copy.into_iter().map(|s| (s, s.min(thresh).max(-thresh))) {
+            if ns != os { diff_count += 1; }
+            writer.write_sample(ns as i16).expect("Error: could not write sample");
+        }
+        println!("Samples clipped: {} out of {} which is 1/{} or {}%", diff_count, total, total / diff_count, diff_count as f64 / total as f64 * 100.0);
+    } else {
+        for s in copy.into_iter().map(|s| s.min(thresh).max(-thresh) as i16) {
+            writer.write_sample(s).expect("Error: could not write sample");
+        }
     }
-    println!("Samples clipped: {} out of {} which is 1/{} or {}%", diff_count, total, total / diff_count, diff_count as f64 / total as f64 * 100.0);
-    stamper.stamp("Write");
-    println!("Total took {} ms", stamper.elapsed());
+    stamper.stamp_step("Write");
+    stamper.stamp_abs("Total");
 }
 
-fn depeaked_size(hist: &Vec<usize>, max: usize) -> usize{
+fn depeaked_size(hist: &[usize], max: usize) -> usize{
     let mut i = hist.len() - 2;
     while i > 0{
         let c = hist[i as usize];
@@ -57,23 +75,28 @@ fn depeaked_size(hist: &Vec<usize>, max: usize) -> usize{
 struct Stamper{
     start: Instant,
     till: u128,
+    verbose: bool,
 }
 
 impl Stamper{
-    pub fn new() -> Self{
+    pub fn new(verbose: bool) -> Self{
         Self{
             start: Instant::now(),
             till: 0,
+            verbose,
         }
     }
 
-    pub fn stamp(&mut self, action: &str){
+    pub fn stamp_step(&mut self, action: &str){
+        if !self.verbose { return; }
         let elapsed = self.start.elapsed().as_millis();
         println!("{} took {} ms", action, elapsed - self.till);
         self.till = elapsed;
     }
 
-    pub fn elapsed(&self) -> u128{
-        self.start.elapsed().as_millis()
+    pub fn stamp_abs(&self, action: &str){
+        if !self.verbose { return; }
+        let elapsed = self.start.elapsed().as_millis();
+        println!("{} took {} ms", action, elapsed);
     }
 }
