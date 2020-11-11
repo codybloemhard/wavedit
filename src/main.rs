@@ -3,17 +3,19 @@ use std::time::Instant;
 fn main() {
     let args = lapp::parse_args("
         Wavedit edits .wav files.
-        --max (default 100) maximum amount of samples allowed per cell
         -v, --verbose print more info
         -s, --stats calculate some extra statistics
+        --max (default 100) maximum amount of samples allowed per cell
+        --fac (default 0.0) if more than 0, the factor of samples that may be discarded
         <file> (string) input file
     ");
     println!("Henlo!");
+    let verbose = args.get_bool("verbose");
+    let stats = args.get_bool("stats");
     let max = args.get_integer("max");
     let max = if max < 0 { panic!("Error: max must be in {{0..2^64 - 1}}"); }
     else { max as usize };
-    let verbose = args.get_bool("verbose");
-    let stats = args.get_bool("stats");
+    let fac = args.get_float("fac");
     let file = args.get_string("file");
     let mut stamper = Stamper::new(verbose);
     let mut reader = hound::WavReader::open(file).expect("Could not open file!");
@@ -31,9 +33,11 @@ fn main() {
         hist[i as usize] += 1usize;
         total += 1;
     }
+    let max = if fac > 0.0 { (total as f64 * fac as f64) as usize } else { max };
     stamper.stamp_step("Histogram");
-    println!("Total samples: {}", total);
-    let cs = depeaked_size(&hist, max);
+    if verbose { println!("Total samples: {}", total); }
+    let cs = if fac > 0.0 { depeaked_size_acc(&hist, (total as f64 * fac as f64) as usize) }
+    else { depeaked_size_until(&hist, max) };
     stamper.stamp_step("Depeak scan");
     if verbose {
         println!("upwards from cell {} out of {} will be clipped with max cell length > {}", cs, hist.len() - 1, max);
@@ -62,11 +66,22 @@ fn main() {
     stamper.stamp_abs("Total");
 }
 
-fn depeaked_size(hist: &[usize], max: usize) -> usize{
+fn depeaked_size_until(hist: &[usize], max: usize) -> usize{
     let mut i = hist.len() - 2;
     while i > 0{
         let c = hist[i as usize];
         if c > max { break; }
+        i -= 1;
+    }
+    i
+}
+
+fn depeaked_size_acc(hist: &[usize], max: usize) -> usize{
+    let mut i = hist.len() - 2;
+    let mut acc = 0;
+    while i > 0{
+        acc += hist[i as usize];
+        if acc > max { break; }
         i -= 1;
     }
     i
