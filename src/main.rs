@@ -26,23 +26,8 @@ fn main() {
         copy.push(s);
     }
     stamper.stamp_step("Copying");
-    let mut hist = vec![0usize; 2048];
-    let mut total = 0;
-    for s in &copy{
-        let i = (*s).max(std::i16::MIN + 1).abs() >> 4;
-        hist[i as usize] += 1usize;
-        total += 1;
-    }
-    let max = if fac > 0.0 { (total as f64 * fac as f64) as usize } else { max };
-    stamper.stamp_step("Histogram");
-    if verbose { println!("Total samples: {}", total); }
-    let cs = if fac > 0.0 { depeaked_size_acc(&hist, (total as f64 * fac as f64) as usize) }
-    else { depeaked_size_until(&hist, max) };
-    stamper.stamp_step("Depeak scan");
-    if verbose {
-        println!("upwards from cell {} out of {} will be clipped with max cell length > {}", cs, hist.len() - 1, max);
-    }
-    let thresh = (cs << 4) as i16;
+    let (total,hist) = build_histogram(&copy, &mut stamper, verbose);
+    copy = clip_peaks(copy, &hist, total, max, fac, verbose, stats, &mut stamper);
     let spec = hound::WavSpec {
         channels: 2,
         sample_rate: 44100,
@@ -50,20 +35,50 @@ fn main() {
         sample_format: hound::SampleFormat::Int,
     };
     let mut writer = hound::WavWriter::create("outp.wav", spec).unwrap();
-    if stats{
-        let mut diff_count = 0;
-        for (os, ns) in copy.into_iter().map(|s| (s, s.min(thresh).max(-thresh))) {
-            if ns != os { diff_count += 1; }
-            writer.write_sample(ns as i16).expect("Error: could not write sample");
-        }
-        println!("Samples clipped: {} out of {} which is 1/{} or {}%", diff_count, total, total / diff_count, diff_count as f64 / total as f64 * 100.0);
-    } else {
-        for s in copy.into_iter().map(|s| s.min(thresh).max(-thresh) as i16) {
-            writer.write_sample(s).expect("Error: could not write sample");
-        }
+    for s in copy{
+        writer.write_sample(s).expect("Error: could not write sample");
     }
     stamper.stamp_step("Write");
     stamper.stamp_abs("Total");
+}
+
+fn build_histogram(samples: &[i16], stamper: &mut Stamper, verbose: bool) -> (usize,Vec<usize>){
+    let mut hist = vec![0usize; 2048];
+    let mut scount = 0;
+    for s in samples{
+        let i = (*s).max(std::i16::MIN + 1).abs() >> 4;
+        hist[i as usize] += 1usize;
+        scount += 1;
+    }
+    stamper.stamp_step("Histogram");
+    if verbose { println!("Total samples: {}", scount); }
+    (scount,hist)
+}
+
+fn clip_peaks(mut samples: Vec<i16>, hist: &[usize], total: usize, max: usize, fac: f32, verbose: bool, stats: bool, stamper: &mut Stamper) -> Vec<i16>{
+    let max = if fac > 0.0 { (total as f64 * fac as f64) as usize } else { max };
+    let cs = if fac > 0.0 { depeaked_size_acc(&hist, (total as f64 * fac as f64) as usize) }
+    else { depeaked_size_until(hist, max) };
+    let thresh = (cs << 4) as i16;
+    stamper.stamp_step("Depeak scan");
+    if verbose {
+        println!("upwards from cell {} out of {} will be clipped with max cell length > {}", cs, hist.len() - 1, max);
+    }
+    if stats{
+        let mut diff_count = 0;
+        for s in samples.iter_mut(){
+            let ns = (*s).min(thresh).max(-thresh);
+            if ns != *s { diff_count += 1; }
+            *s = ns
+        }
+        println!("Samples clipped: {} out of {} which is 1/{} or {}%", diff_count, total, total / diff_count, diff_count as f64 / total as f64 * 100.0);
+    } else {
+        for s in samples.iter_mut(){
+            *s = (*s).min(thresh).max(-thresh);
+        }
+    }
+    stamper.stamp_step("Peak clipping");
+    samples
 }
 
 fn depeaked_size_until(hist: &[usize], max: usize) -> usize{
