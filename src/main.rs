@@ -5,18 +5,28 @@ fn main() {
         Wavedit edits .wav files.
         -v, --verbose print more info
         -s, --stats calculate some extra statistics
+        --peakclip clip peaks with histogram clipping
+        --histo print the sample histogram
         --max (default 100) maximum amount of samples allowed per cell
         --fac (default 0.0) if more than 0, the factor of samples that may be discarded
         <file> (string) input file
+        <outfile> (default outp.wav) output file
     ");
     println!("Henlo!");
     let verbose = args.get_bool("verbose");
     let stats = args.get_bool("stats");
+    let peakclip = args.get_bool("peakclip");
+    let histo = args.get_bool("histo");
     let max = args.get_integer("max");
     let max = if max < 0 { panic!("Error: max must be in {{0..2^64 - 1}}"); }
     else { max as usize };
     let fac = args.get_float("fac");
     let file = args.get_string("file");
+    let outp = args.get_string("outfile");
+    if !(histo || peakclip) {
+        println!("Nothing to do!");
+        return;
+    }
     let mut stamper = Stamper::new(verbose);
     let mut reader = hound::WavReader::open(file).expect("Could not open file!");
     let mut copy = Vec::new();
@@ -26,20 +36,33 @@ fn main() {
         copy.push(s);
     }
     stamper.stamp_step("Copying");
-    let (total,hist) = build_histogram(&copy, &mut stamper, verbose);
-    copy = clip_peaks(copy, &hist, total, max, fac, verbose, stats, &mut stamper);
+    let (total,hist) = if histo || peakclip { build_histogram(&copy, &mut stamper, verbose) }
+    else { (0, Vec::new()) };
+    if histo { print_histo(&hist, verbose); }
+    if peakclip { copy = clip_peaks(copy, &hist, total, max, fac, verbose, stats, &mut stamper); }
+    if !peakclip{
+        stamper.stamp_abs("Total");
+        return;
+    }
     let spec = hound::WavSpec {
         channels: 2,
         sample_rate: 44100,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
-    let mut writer = hound::WavWriter::create("outp.wav", spec).unwrap();
+    let mut writer = hound::WavWriter::create(outp, spec).unwrap();
     for s in copy{
         writer.write_sample(s).expect("Error: could not write sample");
     }
     stamper.stamp_step("Write");
     stamper.stamp_abs("Total");
+}
+
+fn print_histo(hist: &[usize], verbose: bool){
+    for (i, count) in hist.iter().enumerate(){
+        if verbose { println!("Cell {}: {}", i, count); }
+        else { print!("{}: {}, ", i, count); }
+    }
 }
 
 fn build_histogram(samples: &[i16], stamper: &mut Stamper, verbose: bool) -> (usize,Vec<usize>){
