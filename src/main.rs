@@ -5,8 +5,9 @@ fn main() {
         Wavedit edits .wav files.
         -v, --verbose print more info
         -s, --stats calculate some extra statistics
-        --peakclip clip peaks with histogram clipping
-        --histo print the sample histogram
+        --clippeaks clip peaks with histogram clipping
+        --histogram print the sample histogram
+        --normalize normalize the audio
         --max (default 100) maximum amount of samples allowed per cell
         --fac (default 0.0) if more than 0, the factor of samples that may be discarded
         <file> (string) input file
@@ -15,15 +16,16 @@ fn main() {
     println!("Henlo!");
     let verbose = args.get_bool("verbose");
     let stats = args.get_bool("stats");
-    let peakclip = args.get_bool("peakclip");
-    let histo = args.get_bool("histo");
+    let clippeaks = args.get_bool("clippeaks");
+    let histo = args.get_bool("histogram");
+    let norm = args.get_bool("normalize");
     let max = args.get_integer("max");
     let max = if max < 0 { panic!("Error: max must be in {{0..2^64 - 1}}"); }
     else { max as usize };
     let fac = args.get_float("fac");
     let file = args.get_string("file");
     let outp = args.get_string("outfile");
-    if !(histo || peakclip) {
+    if !(histo || clippeaks || norm) {
         println!("Nothing to do!");
         return;
     }
@@ -36,14 +38,17 @@ fn main() {
         copy.push(s);
     }
     stamper.stamp_step("Copying");
-    let (total,hist) = if histo || peakclip { build_histogram(&copy, &mut stamper, verbose) }
+    let (total,hist) = if histo || clippeaks { build_histogram(&copy, &mut stamper, verbose) }
     else { (0, Vec::new()) };
+    let mut loudest = 0;
     if histo { print_histo(&hist, verbose); }
-    if peakclip { copy = clip_peaks(copy, &hist, total, max, fac, verbose, stats, &mut stamper); }
-    if !peakclip{
+    if clippeaks { copy = clip_peaks(copy, &hist, total, max, fac, verbose, stats, &mut loudest, &mut stamper); }
+    if !(clippeaks || norm){
         stamper.stamp_abs("Total");
         return;
     }
+    if loudest == 0 && norm { loudest = find_loudest(&copy, verbose, &mut stamper); }
+    if norm { copy = normalize(copy, loudest, verbose, &mut stamper); }
     let spec = hound::WavSpec {
         channels: 2,
         sample_rate: 44100,
@@ -56,6 +61,31 @@ fn main() {
     }
     stamper.stamp_step("Write");
     stamper.stamp_abs("Total");
+}
+
+fn normalize(mut samples: Vec<i16>, max: i16, verbose: bool, stamper: &mut Stamper) -> Vec<i16>{
+    if max >= std::i16::MAX - 2 {
+        if verbose { println!("Audio is already normalized!"); }
+        return samples;
+    }
+    let mul = (std::i16::MAX - 1) as f64 / max as f64;
+    for s in samples.iter_mut(){
+        *s = (*s as f64 * mul) as i16
+    }
+    stamper.stamp_step("Normalize audio");
+    if verbose { println!("Normalize with multiplier: {}", mul); }
+    samples
+}
+
+fn find_loudest(samples: &[i16], verbose: bool, stamper: &mut Stamper) -> i16{
+    let mut max = 0;
+    for s in samples{
+        let ns = (*s).max(std::i16::MIN + 1).abs();
+        if ns > max { max = ns; }
+    }
+    stamper.stamp_step("Find global maximum");
+    if verbose { println!("Highest sample: {}", max); }
+    max
 }
 
 fn print_histo(hist: &[usize], verbose: bool){
@@ -78,11 +108,12 @@ fn build_histogram(samples: &[i16], stamper: &mut Stamper, verbose: bool) -> (us
     (scount,hist)
 }
 
-fn clip_peaks(mut samples: Vec<i16>, hist: &[usize], total: usize, max: usize, fac: f32, verbose: bool, stats: bool, stamper: &mut Stamper) -> Vec<i16>{
+fn clip_peaks(mut samples: Vec<i16>, hist: &[usize], total: usize, max: usize, fac: f32, verbose: bool, stats: bool, loudest: &mut i16, stamper: &mut Stamper) -> Vec<i16>{
     let max = if fac > 0.0 { (total as f64 * fac as f64) as usize } else { max };
     let cs = if fac > 0.0 { depeaked_size_acc(&hist, (total as f64 * fac as f64) as usize) }
     else { depeaked_size_until(hist, max) };
     let thresh = (cs << 4) as i16;
+    *loudest = thresh;
     stamper.stamp_step("Depeak scan");
     if verbose {
         println!("upwards from cell {} out of {} will be clipped with max cell length > {}", cs, hist.len() - 1, max);
