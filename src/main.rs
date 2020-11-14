@@ -10,6 +10,7 @@ fn main() {
         --normalize normalize the audio
         --max (default 100) maximum amount of samples allowed per cell
         --fac (default 0.0) if more than 0, the factor of samples that may be discarded
+        --db (default 0.0) peak dB when normalizing(must be negative)
         <file> (string) input file
         <outfile> (default outp.wav) output file
     ");
@@ -23,6 +24,7 @@ fn main() {
     let max = if max < 0 { panic!("Error: max must be in {{0..2^64 - 1}}"); }
     else { max as usize };
     let fac = args.get_float("fac");
+    let db = args.get_float("db");
     let file = args.get_string("file");
     let outp = args.get_string("outfile");
     if !(histo || clippeaks || norm) {
@@ -48,7 +50,7 @@ fn main() {
         return;
     }
     if loudest == 0 && norm { loudest = find_loudest(&copy, verbose, &mut stamper); }
-    if norm { copy = normalize(copy, loudest, verbose, &mut stamper); }
+    if norm { copy = normalize(copy, loudest, db, verbose, &mut stamper); }
     let spec = hound::WavSpec {
         channels: 2,
         sample_rate: 44100,
@@ -63,12 +65,23 @@ fn main() {
     stamper.stamp_abs("Total");
 }
 
-fn normalize(mut samples: Vec<i16>, max: i16, verbose: bool, stamper: &mut Stamper) -> Vec<i16>{
-    if max >= std::i16::MAX - 2 {
+fn sample_to_db(s: i16) -> f32{
+    -20.0 * (std::i16::MAX as f32 / s.max(std::i16::MIN + 1).abs() as f32).log10()
+}
+
+fn db_to_sample(db: f32) -> i16{
+    (10.0f32.powf(db / 20.0) * std::i16::MAX as f32)as i16
+}
+
+fn normalize(mut samples: Vec<i16>, max: i16, db: f32, verbose: bool, stamper: &mut Stamper) -> Vec<i16>{
+    let peakmax = if db > 0.0 { panic!("db must be 0 or negative!"); }
+    else if db == 0.0 { std::i16::MAX - 1 }
+    else { db_to_sample(db) };
+    if max >= peakmax {
         if verbose { println!("Audio is already normalized!"); }
         return samples;
     }
-    let mul = (std::i16::MAX - 1) as f64 / max as f64;
+    let mul = peakmax as f64 / max as f64;
     for s in samples.iter_mut(){
         *s = (*s as f64 * mul) as i16
     }
@@ -84,7 +97,7 @@ fn find_loudest(samples: &[i16], verbose: bool, stamper: &mut Stamper) -> i16{
         if ns > max { max = ns; }
     }
     stamper.stamp_step("Find global maximum");
-    if verbose { println!("Highest sample: {}", max); }
+    if verbose { println!("Highest sample: {} at {} dB", max, sample_to_db(max)); }
     max
 }
 
