@@ -5,12 +5,17 @@ fn main() {
         Wavedit edits .wav files.
         -v, --verbose print more info
         -s, --stats calculate some extra statistics
-        --clippeaks clip peaks with histogram clipping
         --histogram print the sample histogram
-        --normalize normalize the audio
+        --clippeaks clip peaks with histogram clipping
+        --drc dynamic range compression: reduces dynamics
+        --normalize normalize the audio if global peak is lower than normalize ceiling
         --max (default 100) maximum amount of samples allowed per cell
         --fac (default 0.0) if more than 0, the factor of samples that may be discarded
-        --db (default 0.0) peak dB when normalizing(must be negative)
+        --db (default 0.0) peak dB ceiling when normalizing(must be negative)
+        --ratio (default 1.5) dynamic range compression ratio (higher is more compression, should be > 1.0)
+        --attack (default 15) dynamic range compression attack time in ms (should be >= 0)
+        --release (default 10) dynamic range compression release time in ms (should be >= 0)
+        --threshold (default 20.0) dynamic range compression threshold in dB (times -1, should be > 0.0, so 20 is -20 dB)
         <file> (string) input file
         <outfile> (default outp.wav) output file
     ");
@@ -20,14 +25,19 @@ fn main() {
     let clippeaks = args.get_bool("clippeaks");
     let histo = args.get_bool("histogram");
     let norm = args.get_bool("normalize");
+    let comp = args.get_bool("drc");
     let max = args.get_integer("max");
     let max = if max < 0 { panic!("Error: max must be in {{0..2^64 - 1}}"); }
     else { max as usize };
     let fac = args.get_float("fac");
     let db = args.get_float("db");
+    let ratio = args.get_float("ratio");
+    let attack = args.get_integer("attack");
+    let release = args.get_integer("release");
+    let threshold = args.get_float("threshold") * -1.0;
     let file = args.get_string("file");
     let outp = args.get_string("outfile");
-    if !(histo || clippeaks || norm) {
+    if !(histo || clippeaks || norm || comp) {
         println!("Nothing to do!");
         return;
     }
@@ -45,11 +55,14 @@ fn main() {
     let mut loudest = 0;
     if histo { print_histo(&hist, verbose); }
     if clippeaks { copy = clip_peaks(copy, &hist, total, max, fac, verbose, stats, &mut loudest, &mut stamper); }
-    if !(clippeaks || norm){
+    if !(clippeaks || norm || comp){
         stamper.stamp_abs("Total");
         return;
     }
-    if loudest == 0 && norm { loudest = find_loudest(&copy, verbose, &mut stamper); }
+    if comp{
+        copy = dynamic_compress(copy, threshold, ratio, attack, release, &mut stamper);
+    }
+    if (loudest == 0 || comp) && norm { loudest = find_loudest(&copy, verbose, &mut stamper); }
     if norm { copy = normalize(copy, loudest, db, verbose, &mut stamper); }
     let spec = hound::WavSpec {
         channels: 2,
@@ -63,6 +76,25 @@ fn main() {
     }
     stamper.stamp_step("Write");
     stamper.stamp_abs("Total");
+}
+
+fn dynamic_compress(mut samples: Vec<i16>, thresh: f32, ratio: f32, attack: i32, release: i32, stamper: &mut Stamper) -> Vec<i16>{
+    if thresh >= 0.0 { panic!("Dynamic range compression threshold must be < 0 dB"); }
+    if attack < 0 { panic!("Dynamic range compression attack must be > 0 ms"); }
+    if release < 0 { panic!("Dynamic range compression release must be > 0 ms"); }
+    if ratio < 1.0 { panic!("Dynamic range compression ratio must be > 1.0"); }
+    let ratio = ratio - 1.0;
+    let attack = 1.0 / (44100.0 * attack as f32 / 1000.0) * ratio;
+    let release = 1.0 / (44100.0 * release as f32 / 1000.0) * ratio;
+    let thresh = db_to_sample(thresh);
+    let mut compress_fac = 0.0;
+    for s in samples.iter_mut(){
+        if *s >= thresh { compress_fac = (compress_fac + attack).min(ratio); }
+        if *s < thresh { compress_fac = (compress_fac - release).max(0.0); }
+        *s = (*s as f32 / (1.0 + compress_fac)) as i16;
+    }
+    stamper.stamp_step("Dynamic range compression");
+    samples
 }
 
 fn sample_to_db(s: i16) -> f32{
@@ -129,7 +161,7 @@ fn clip_peaks(mut samples: Vec<i16>, hist: &[usize], total: usize, max: usize, f
     *loudest = thresh;
     stamper.stamp_step("Depeak scan");
     if verbose {
-        println!("upwards from cell {} out of {} will be clipped with max cell length > {}", cs, hist.len() - 1, max);
+        println!("upwards from cell {} out of {} will be clipped with max cell length > {} ({} dB headroom)", cs, hist.len() - 1, max, -sample_to_db(thresh));
     }
     if stats{
         let mut diff_count = 0;
