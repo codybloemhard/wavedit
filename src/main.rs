@@ -89,8 +89,9 @@ fn dynamic_compress(mut samples: Vec<i16>, thresh: f32, ratio: f32, attack: i32,
     let thresh = db_to_sample(thresh);
     let mut compress_fac = 0.0;
     for s in samples.iter_mut(){
-        if *s >= thresh { compress_fac = (compress_fac + attack).min(ratio); }
-        if *s < thresh { compress_fac = (compress_fac - release).max(0.0); }
+        let abs = (*s).max(std::i16::MIN + 1).abs();
+        if abs >= thresh { compress_fac = (compress_fac + attack).min(ratio); }
+        if abs < thresh { compress_fac = (compress_fac - release).max(0.0); }
         *s = (*s as f32 / (1.0 + compress_fac)) as i16;
     }
     stamper.stamp_step("Dynamic range compression");
