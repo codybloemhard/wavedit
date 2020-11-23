@@ -37,13 +37,23 @@ fn main() {
     let threshold = args.get_float("threshold") * -1.0;
     let file = args.get_string("file");
     let outp = args.get_string("outfile");
-    if !(histo || clippeaks || norm || comp) {
+    if !(histo || clippeaks || norm || comp || verbose) {
         println!("Nothing to do!");
         return;
     }
     let mut stamper = Stamper::new(verbose);
     let mut reader = hound::WavReader::open(file).expect("Could not open file!");
     let mut copy = Vec::new();
+    let specs = reader.spec();
+    if verbose{
+        println!("Track Info: Channels: {}, Sample Rate: {}, Bits: {}, Type: {:?}",
+            specs.channels, specs.sample_rate, specs.bits_per_sample, specs.sample_format);
+    }
+    if !(histo || clippeaks || norm || comp) { return; }
+    if specs.bits_per_sample != 16 || specs.sample_format != hound::SampleFormat::Int {
+        println!("Format not supported, only 16bit integer formats supported!");
+        return;
+    }
     for s in reader.samples::<i16>(){
         if s.is_err() { continue; }
         let s = s.unwrap();
@@ -64,13 +74,7 @@ fn main() {
     }
     if (loudest == 0 || comp) && norm { loudest = find_loudest(&copy, verbose, &mut stamper); }
     if norm { copy = normalize(copy, loudest, db, verbose, &mut stamper); }
-    let spec = hound::WavSpec {
-        channels: 2,
-        sample_rate: 44100,
-        bits_per_sample: 16,
-        sample_format: hound::SampleFormat::Int,
-    };
-    let mut writer = hound::WavWriter::create(outp, spec).unwrap();
+    let mut writer = hound::WavWriter::create(outp, specs).unwrap();
     for s in copy{
         writer.write_sample(s).expect("Error: could not write sample");
     }
