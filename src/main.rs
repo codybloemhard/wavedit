@@ -12,6 +12,7 @@ fn main() {
         --max (default 20) maximum amount of samples allowed per cell
         --fac (default 0.0) if more than 0, the factor of samples that may be discarded
         --db (default 0.0) peak dB ceiling when normalizing(must be negative)
+        --outputbits (default 0) bitdepth of the output, default will use whatever is the input bitdepth
         <file> (string) input file
         <outfile> (default outp.wav) output file
     ");
@@ -27,10 +28,15 @@ fn main() {
     else { max as usize };
     let fac = args.get_float("fac");
     let db = args.get_float("db");
+    let outputbits = args.get_integer("outputbits").max(0) as usize;
     let file = args.get_string("file");
     let outp = args.get_string("outfile");
     if !(histo || clippeaks || norm || comp || verbose) {
         println!("Nothing to do!");
+        return;
+    }
+    if !(outputbits == 0 || outputbits == 8 || outputbits == 16 || outputbits == 24 || outputbits == 32) {
+        println!("Only 8, 16, 24 and 32 bit samples are supported!");
         return;
     }
     let mut stamper = Stamper::new(verbose);
@@ -40,6 +46,10 @@ fn main() {
     if verbose{
         println!("Track Info: Channels: {}, Sample Rate: {}, Bits: {}, Type: {:?}",
             specs.channels, specs.sample_rate, specs.bits_per_sample, specs.sample_format);
+    }
+    if outputbits > specs.bits_per_sample.into(){
+        println!("Cannot render in a higher bitdepth than the input! (Would be possible but not that useful?).");
+        return;
     }
     if !(histo || clippeaks || norm || comp) { return; }
     if specs.sample_format != hound::SampleFormat::Int || specs.bits_per_sample > 32{
@@ -70,9 +80,13 @@ fn main() {
     }
     if loudest == 0 && norm { loudest = find_loudest(&copy, verbose, &mut stamper); }
     if norm { copy = normalize(copy, loudest, db, verbose, &mut stamper); }
-    let mut writer = hound::WavWriter::create(outp, specs).unwrap();
     // move back into preffered bitsize
-    if specs.bits_per_sample <= 16{
+    let bits = if outputbits == 0 { specs.bits_per_sample as usize } else { outputbits };
+    let shift = 32 - bits;
+    let mut specs = specs;
+    specs.bits_per_sample = bits as u16;
+    let mut writer = hound::WavWriter::create(outp, specs).unwrap();
+    if bits <= 16{
         for s in copy.into_iter().map(|s| (s >> shift) as i16).collect::<Vec<i16>>(){
             writer.write_sample(s).expect("Error: could not write sample");
         }
@@ -123,6 +137,7 @@ fn find_loudest(samples: &[i32], verbose: bool, stamper: &mut Stamper) -> i32{
 
 fn print_histo(hist: &[usize], verbose: bool){
     for (i, count) in hist.iter().enumerate(){
+        if *count == 0 { continue; }
         if verbose { println!("Cell {}: {}", i, count); }
         else { print!("{}: {}, ", i, count); }
     }
