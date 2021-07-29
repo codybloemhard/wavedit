@@ -76,7 +76,7 @@ fn main() {
                 return;
             }
             last = point;
-            points.push((point.max(0) as f32 / 1000.0 * specs.sample_rate as f32) as u32 * 2);
+            points.push((point.max(0) as f64 / 1000.0 * specs.sample_rate as f64) as u32 * 2);
         }
         points.push(std::u32::MAX);
         // we need to ignore certain parts
@@ -192,7 +192,7 @@ fn clip_peaks(mut samples: Vec<i32>, hist: &[usize], total: usize, max: usize, f
     let cs = if fac > 0.0 { depeaked_size_acc(&hist, (total as f64 * fac as f64) as usize) }
     else { depeaked_size_until(hist, max) };
     let cs = if let Some(inner) = cs { inner } else {
-        println!("No clipping needed!");
+        if verbose { println!("No clipping needed!"); }
         return samples;
     };
     let thresh = (cs << 20) as i32;
