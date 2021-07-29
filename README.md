@@ -19,13 +19,7 @@ Wavedit edits .wav files.
 
 --db (default 0.0) peak dB ceiling when normalizing(must be negative)
 
---ratio (default 1.5) dynamic range compression ratio (higher is more compression, should be > 1.0)
-
---attack (default 15) dynamic range compression attack time in ms (should be >= 0)
-
---release (default 10) dynamic range compression release time in ms (should be >= 0)
-
---threshold (default 20.0) dynamic range compression threshold in dB (times -1, should be > 0.0, so 20 is -20 dB)
+--outputbits (default 0) bitdepth of the output, default will use whatever is the input bitdepth
 
 <file> (string) input file
 
