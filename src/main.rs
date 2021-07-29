@@ -13,6 +13,7 @@ fn main() {
         --fac (default 0.0) if more than 0, the factor of samples that may be discarded
         --db (default 0.0) peak dB ceiling when normalizing(must be negative)
         --outputbits (default 0) bitdepth of the output, default will use whatever is the input bitdepth
+        --cuts (integer...) timestamps in ms alternating begin and end time to cut away material. needs to be partially ordered
         <file> (string) input file
         <outfile> (default outp.wav) output file
     ");
@@ -29,6 +30,7 @@ fn main() {
     let fac = args.get_float("fac");
     let db = args.get_float("db");
     let outputbits = args.get_integer("outputbits").max(0) as usize;
+    let cuts = args.get_integers("cuts");
     let file = args.get_string("file");
     let outp = args.get_string("outfile");
     if !(histo || clippeaks || norm || comp || verbose) {
@@ -56,11 +58,40 @@ fn main() {
         println!("Format not supported, only integer formats up to 32 bits supported!");
         return;
     }
-    // read samples
-    for s in reader.samples(){
-        if s.is_err() { continue; }
-        let s = s.unwrap();
-        copy.push(s);
+    // read samples and cut out parts
+    // simple and fast version for cutless jobs
+    if cuts.is_empty(){
+        for s in reader.samples(){
+            if s.is_err() { continue; }
+            let s = s.unwrap();
+            copy.push(s);
+        }
+    } else {
+        // check if input is ok
+        let mut points = Vec::new();
+        let mut last = 0;
+        for point in cuts{
+            if point < last {
+                println!("Points in cut list must be partially ordered!");
+                return;
+            }
+            last = point;
+            points.push((point.max(0) as f32 / 1000.0 * specs.sample_rate as f32) as u32 * 2);
+        }
+        points.push(std::u32::MAX);
+        // we need to ignore certain parts
+        let mut cut = false;
+        let mut next = 0;
+        for (i, s) in reader.samples().enumerate(){
+            if points[next] == i as u32 {
+                next += 1;
+                cut = !cut;
+            }
+            if cut { continue; }
+            if s.is_err() { continue; }
+            let s = s.unwrap();
+            copy.push(s);
+        }
     }
     // move them into 32 bits
     let shift = 32 - specs.bits_per_sample;
@@ -115,7 +146,7 @@ fn normalize(mut samples: Vec<i32>, max: i32, db: f32, verbose: bool, stamper: &
         if verbose { println!("Audio is already normalized!"); }
         return samples;
     }
-    let mul = peakmax as f64 / max as f64;
+    let mul = if max > 0 { peakmax as f64 / max as f64 } else { 1.0 };
     for s in samples.iter_mut(){
         *s = (*s as f64 * mul) as i32
     }
@@ -160,6 +191,10 @@ fn clip_peaks(mut samples: Vec<i32>, hist: &[usize], total: usize, max: usize, f
     let max = if fac > 0.0 { (total as f64 * fac as f64) as usize } else { max };
     let cs = if fac > 0.0 { depeaked_size_acc(&hist, (total as f64 * fac as f64) as usize) }
     else { depeaked_size_until(hist, max) };
+    let cs = if let Some(inner) = cs { inner } else {
+        println!("No clipping needed!");
+        return samples;
+    };
     let thresh = (cs << 20) as i32;
     *loudest = thresh;
     stamper.stamp_step("Depeak scan");
@@ -173,7 +208,9 @@ fn clip_peaks(mut samples: Vec<i32>, hist: &[usize], total: usize, max: usize, f
             if ns != *s { diff_count += 1; }
             *s = ns
         }
-        println!("Samples clipped: {} out of {} which is 1/{} or {}%", diff_count, total, total / diff_count, diff_count as f64 / total as f64 * 100.0);
+        let fraction = if diff_count == 0 { 0 } else { total / diff_count };
+        let percentage = if total == 0 { 0.0 } else { diff_count as f64 / total as f64 * 100.0 };
+        println!("Samples clipped: {} out of {} which is 1/{} or {}%", diff_count, total, fraction, percentage);
     } else {
         for s in samples.iter_mut(){
             *s = (*s).min(thresh).max(-thresh);
@@ -183,25 +220,27 @@ fn clip_peaks(mut samples: Vec<i32>, hist: &[usize], total: usize, max: usize, f
     samples
 }
 
-fn depeaked_size_until(hist: &[usize], max: usize) -> usize{
+fn depeaked_size_until(hist: &[usize], max: usize) -> Option<usize>{
+    if hist[2047] > max { return None; }
     let mut i = hist.len() - 1;
     while i > 0{
         let c = hist[i as usize];
         if c > max { break; }
         i -= 1;
     }
-    i
+    Some(i)
 }
 
-fn depeaked_size_acc(hist: &[usize], max: usize) -> usize{
-    let mut i = hist.len() - 2;
+fn depeaked_size_acc(hist: &[usize], max: usize) -> Option<usize>{
+    if hist[2047] > max { return None; }
+    let mut i = hist.len() - 1;
     let mut acc = 0;
     while i > 0{
         acc += hist[i as usize];
         if acc > max { break; }
         i -= 1;
     }
-    i
+    Some(i)
 }
 
 struct Stamper{
