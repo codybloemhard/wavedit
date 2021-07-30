@@ -21,6 +21,11 @@ Wavedit edits .wav files.
 
 --outputbits (default 0) bitdepth of the output, default will use whatever is the input bitdepth
 
+--cuts (integer...) timestamps in ms alternating begin and end time to cut away material. needs to be partially ordered
+
+--fades (integer...) timestamps(in N0) in ms(after the cuts) alternating begin and end time to fade in and out material.
+    Fading in and out alternates per pair of points and starts with fade in. Needs to be partially ordered.
+
 <file> (string) input file
 
 <outfile> (default outp.wav) output file

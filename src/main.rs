@@ -7,13 +7,14 @@ fn main() {
         -s, --stats calculate some extra statistics
         --histogram print the sample histogram
         --clippeaks clip peaks with histogram clipping
-        --drc dynamic range compression: reduces dynamics
         --normalize normalize the audio if global peak is lower than normalize ceiling
         --max (default 20) maximum amount of samples allowed per cell
         --fac (default 0.0) if more than 0, the factor of samples that may be discarded
         --db (default 0.0) peak dB ceiling when normalizing(must be negative)
         --outputbits (default 0) bitdepth of the output, default will use whatever is the input bitdepth
-        --cuts (integer...) timestamps in ms alternating begin and end time to cut away material. needs to be partially ordered
+        --cuts (integer...) timestamps(in N0) in ms alternating begin and end time to cut away material. Needs to be partially ordered
+        --fades (integer...) timestamps(in N0) in ms(after the cuts) alternating begin and end time to fade in and out material.
+            Fading in and out alternates per pair of points and starts with fade in. Needs to be partially ordered.
         <file> (string) input file
         <outfile> (default outp.wav) output file
     ");
@@ -23,7 +24,6 @@ fn main() {
     let clippeaks = args.get_bool("clippeaks");
     let histo = args.get_bool("histogram");
     let norm = args.get_bool("normalize");
-    let comp = args.get_bool("drc");
     let max = args.get_integer("max");
     let max = if max < 0 { panic!("{}", "Error: max must be in {{0..2^64 - 1}}"); }
     else { max as usize };
@@ -31,9 +31,11 @@ fn main() {
     let db = args.get_float("db");
     let outputbits = args.get_integer("outputbits").max(0) as usize;
     let cuts = args.get_integers("cuts");
+    let fades = args.get_integers("fades");
     let file = args.get_string("file");
     let outp = args.get_string("outfile");
-    if !(histo || clippeaks || norm || comp || verbose) {
+    // setup and checks
+    if !(histo || clippeaks || norm || verbose) {
         println!("Nothing to do!");
         return;
     }
@@ -53,10 +55,20 @@ fn main() {
         println!("Cannot render in a higher bitdepth than the input! (Would be possible but not that useful?).");
         return;
     }
-    if !(histo || clippeaks || norm || comp) { return; }
+    if !(histo || clippeaks || norm) { return; }
     if specs.sample_format != hound::SampleFormat::Int || specs.bits_per_sample > 32{
         println!("Format not supported, only integer formats up to 32 bits supported!");
         return;
+    }
+    if !fades.is_empty(){
+        let mut last = 0;
+        for point in &fades{
+            if point < &last {
+                println!("Points in fades list must be partially ordered!");
+                return;
+            }
+            last = *point;
+        }
     }
     // read samples and cut out parts
     // simple and fast version for cutless jobs
@@ -99,16 +111,22 @@ fn main() {
         copy = copy.into_iter().map(|x| x << shift).collect::<Vec<_>>();
     }
     stamper.stamp_step("Copying");
-    // do processing
+    // apply fades
+    if !fades.is_empty(){
+        copy = fade(copy, &fades, specs.sample_rate);
+        stamper.stamp_step("Fades");
+    }
+    // clip peaks
     let (total,hist) = if histo || clippeaks { build_histogram(&copy, &mut stamper, verbose) }
     else { (0, Vec::new()) };
     let mut loudest = 0;
     if histo { print_histo(&hist, verbose); }
     if clippeaks { copy = clip_peaks(copy, &hist, total, max, fac, verbose, stats, &mut loudest, &mut stamper); }
-    if !(clippeaks || norm || comp){
+    if !(clippeaks || norm){
         stamper.stamp_abs("Total");
         return;
     }
+    // normalize
     if loudest == 0 && norm { loudest = find_loudest(&copy, verbose, &mut stamper); }
     if norm { copy = normalize(copy, loudest, db, verbose, &mut stamper); }
     // move back into preffered bitsize
@@ -164,6 +182,45 @@ fn find_loudest(samples: &[i32], verbose: bool, stamper: &mut Stamper) -> i32{
     stamper.stamp_step("Find global maximum");
     if verbose { println!("Highest sample: {} at {} dB", max, sample_to_db(max)); }
     max
+}
+
+
+fn fade(samples: Vec<i32>, fades: &[i32], sr: u32) -> Vec<i32>{
+    let mut points = Vec::new();
+    for point in fades{
+        points.push(((*point).max(0) as f64 / 1000.0 * sr as f64) as u32 * 2);
+    }
+    let mut res = Vec::new();
+    let mut next = 0;
+    let mut fade = false;
+    let mut f_in = true;
+    let mut start = 0;
+    let mut duration = 0.0;
+    for (i, s) in samples.into_iter().enumerate(){
+        // need to change state
+        if i == points[next] as usize{
+            fade = !fade; // swap fade state
+            if !fade{ // after every fade section we go from fade in to out and vice versa
+                f_in = !f_in;
+            }
+            // take start and duration for lerping
+            start = i;
+            if points.len() > next + 1{
+                next += 1;
+                let end = points[next] as usize;
+                duration = (end - start) as f64;
+            }
+        }
+        if !fade{
+            res.push(s);
+        } else {
+            // lerp the sample
+            let x = (i - start) as f64 / duration;
+            let f = if f_in { x } else { 1.0 - x };
+            res.push((s as f64 * f) as i32);
+        }
+    }
+    res
 }
 
 fn print_histo(hist: &[usize], verbose: bool){
