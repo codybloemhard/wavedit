@@ -117,11 +117,13 @@ fn main() {
         stamper.stamp_step("Fades");
     }
     // clip peaks
-    let (total,hist) = if histo || clippeaks { build_histogram(&copy, &mut stamper, verbose) }
+    let (total, hist) = if histo || clippeaks { build_histogram(&copy, &mut stamper, verbose) }
     else { (0, Vec::new()) };
     let mut loudest = 0;
     if histo { print_histo(&hist, verbose); }
-    if clippeaks { copy = clip_peaks(copy, &hist, total, max, fac, verbose, stats, &mut loudest, &mut stamper); }
+    if clippeaks {
+        copy = clip_peaks(copy, &hist, total, max, fac, verbose, stats, &mut loudest, &mut stamper);
+    }
     if !(clippeaks || norm){
         stamper.stamp_abs("Total");
         return;
@@ -244,9 +246,12 @@ fn build_histogram(samples: &[i32], stamper: &mut Stamper, verbose: bool) -> (us
     (scount, hist)
 }
 
-fn clip_peaks(mut samples: Vec<i32>, hist: &[usize], total: usize, max: usize, fac: f32, verbose: bool, stats: bool, loudest: &mut i32, stamper: &mut Stamper) -> Vec<i32>{
+fn clip_peaks(
+    mut samples: Vec<i32>, hist: &[usize], total: usize, max: usize, fac: f32, verbose: bool,
+    stats: bool, loudest: &mut i32, stamper: &mut Stamper
+) -> Vec<i32> {
     let max = if fac > 0.0 { (total as f64 * fac as f64) as usize } else { max };
-    let cs = if fac > 0.0 { depeaked_size_acc(&hist, (total as f64 * fac as f64) as usize) }
+    let cs = if fac > 0.0 { depeaked_size_acc(hist, (total as f64 * fac as f64) as usize) }
     else { depeaked_size_until(hist, max) };
     let cs = if let Some(inner) = cs { inner } else {
         if verbose { println!("No clipping needed!"); }
@@ -256,7 +261,9 @@ fn clip_peaks(mut samples: Vec<i32>, hist: &[usize], total: usize, max: usize, f
     *loudest = thresh;
     stamper.stamp_step("Depeak scan");
     if verbose {
-        println!("upwards from cell {} out of {} will be clipped with max cell length > {} ({} dB headroom)", cs, hist.len() - 1, max, -sample_to_db(thresh));
+        println!(
+            "upwards from cell {} out of {} will be clipped with max cell length > {} ({} dB headroom)",            cs, hist.len() - 1, max, -sample_to_db(thresh)
+        );
     }
     if stats{
         let mut diff_count = 0;
@@ -267,7 +274,10 @@ fn clip_peaks(mut samples: Vec<i32>, hist: &[usize], total: usize, max: usize, f
         }
         let fraction = if diff_count == 0 { 0 } else { total / diff_count };
         let percentage = if total == 0 { 0.0 } else { diff_count as f64 / total as f64 * 100.0 };
-        println!("Samples clipped: {} out of {} which is 1/{} or {}%", diff_count, total, fraction, percentage);
+        println!(
+            "Samples clipped: {} out of {} which is 1/{} or {}%",
+            diff_count, total, fraction, percentage
+        );
     } else {
         for s in samples.iter_mut(){
             *s = (*s).min(thresh).max(-thresh);
@@ -281,7 +291,7 @@ fn depeaked_size_until(hist: &[usize], max: usize) -> Option<usize>{
     if hist[2047] > max { return None; }
     let mut i = hist.len() - 1;
     while i > 0{
-        let c = hist[i as usize];
+        let c = hist[i];
         if c > max { break; }
         i -= 1;
     }
@@ -293,7 +303,7 @@ fn depeaked_size_acc(hist: &[usize], max: usize) -> Option<usize>{
     let mut i = hist.len() - 1;
     let mut acc = 0;
     while i > 0{
-        acc += hist[i as usize];
+        acc += hist[i];
         if acc > max { break; }
         i -= 1;
     }
